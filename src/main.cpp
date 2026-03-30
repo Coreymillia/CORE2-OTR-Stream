@@ -317,47 +317,16 @@ void setup() {
 
     audio.connecttohost(stations[0].c_str());
 
-    // ── SI4713 FM modulator probe with full I2C diagnostic ────────────────────
-    // Explicit Wire init + manual RST toggle before library call
+    // ── SI4713 FM modulator probe ─────────────────────────────────────────────
     Wire.begin(21, 22);
-    delay(50);
     pinMode(SI4713_RST, OUTPUT);
     digitalWrite(SI4713_RST, HIGH); delay(10);
     digitalWrite(SI4713_RST, LOW);  delay(100);
     digitalWrite(SI4713_RST, HIGH); delay(150);
 
-    // Raw I2C scan — results shown on screen AND serial
-    M5.Lcd.fillScreen(TFT_BLACK);
+    M5.Lcd.setCursor(2, 50);
     M5.Lcd.setTextSize(1);
-    M5.Lcd.setTextColor(TFT_GREEN);
-    M5.Lcd.setCursor(0, 0);
-    M5.Lcd.println("I2C scan (SDA=GPIO21, SCL=GPIO22)");
-    M5.Lcd.println("--------------------------------");
-    Serial.println("\n=== I2C SCAN ===");
-    bool anyFound = false;
-    for (uint8_t addr = 0x03; addr <= 0x77; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
-            char buf[40];
-            snprintf(buf, sizeof(buf), "  Device at 0x%02X", addr);
-            M5.Lcd.setTextColor(addr == 0x63 ? TFT_YELLOW : TFT_CYAN);
-            M5.Lcd.println(buf);
-            Serial.println(buf);
-            anyFound = true;
-        }
-    }
-    if (!anyFound) {
-        M5.Lcd.setTextColor(TFT_RED);
-        M5.Lcd.println("  NO DEVICES FOUND");
-        Serial.println("  NO DEVICES FOUND");
-    }
     M5.Lcd.setTextColor(TFT_WHITE);
-    M5.Lcd.println("\n0x63 = SI4713 (SEN high)");
-    M5.Lcd.println("0x11 = SI4713 (SEN low)");
-    M5.Lcd.println("\nWaiting 5s...");
-    Serial.println("===============");
-    delay(5000);
-
     if (si4713.begin()) {
         fmPresent = true;
         si4713.powerUp();
@@ -369,15 +338,11 @@ void setup() {
         i2s_driver_uninstall(I2S_NUM_0);
         audioFM = new Audio(true, 3, I2S_NUM_0);
         audioFM->setVolume(volume * 2);
-        // Do NOT connect here — starts in speaker mode; user toggles with long-press BtnA
-        M5.Lcd.setTextColor(TFT_GREEN);
-        M5.Lcd.println("SI4713 INIT OK");
+        M5.Lcd.println("FM module detected.");
     } else {
-        M5.Lcd.setTextColor(TFT_RED);
-        M5.Lcd.println("SI4713 begin() FAILED");
-        Serial.println("SI4713 begin() failed");
+        M5.Lcd.println("FM module not present (optional).");
     }
-    delay(2000);
+    delay(400);
 
     // Pin audio to core 0 alongside WiFi; display loop stays on core 1
     xTaskCreatePinnedToCore(audioTask, "audioT", 8192, NULL, 2,

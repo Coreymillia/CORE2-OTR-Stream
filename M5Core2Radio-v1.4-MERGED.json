@@ -1,0 +1,19 @@
+{
+  "name": "M5Core2Radio-v1.4",
+  "version": "1.4",
+  "description": "M5Stack Core2 OTR Internet Radio with optional SI4713 FM Transmitter",
+  "author": "Corey Millia / GitHub Copilot",
+  "board": "M5Stack Core2",
+  "flash_size": "16MB",
+  "flash_freq": "80MHz",
+  "flash_mode": "DIO",
+  "offset": "0x0",
+  "bin": "M5Core2Radio-v1.4-MERGED.bin",
+  "changes": [
+    "Fixed button regression (wasReleased spurious boot fires replaced with manual isPressed timer)",
+    "Removed 5-second I2C diagnostic scan from boot sequence",
+    "Long-press BtnA toggles FM/Speaker mode (when SI4713 present)",
+    "Long-press BtnB in FM mode toggles AUX input (stops stream, GPIO26 Hi-Z for ext audio source)",
+    "Short-press BtnA opens settings, short-press BtnB cycles stations (unchanged)"
+  ]
+}

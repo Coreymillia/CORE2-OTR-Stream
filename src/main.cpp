@@ -7,8 +7,14 @@
  * Key upgrade over Core1: I2S digital audio → NS4168 amp (16-bit, no DAC hiss)
  * I2S pins: BCK=GPIO12, LRC=GPIO0, DOUT=GPIO2
  *
+ * Optional SI4713 FM modulator (CJMCU-4713):
+ *   RST=GPIO13, SDA=GPIO21, SCL=GPIO22 (Port A)
+ *   LIN=GPIO26, RIN=GPIO26 (Port B, ESP32 DAC2)
+ *   SEN/CS → module's own 3V0 pin (3.3V, sets I2C addr 0x63)
+ *
  * Controls — touch footer zones AND physical virtual buttons both work:
- *   [SET] / BtnA  = Open sound settings
+ *   [SET] / BtnA  = Open sound settings  (short press)
+ *                   Toggle FM ↔ Speaker   (hold 1 second, only when FM module present)
  *   [STA] / BtnB  = Cycle station
  *   [VOL] / BtnC  = Cycle volume (0–10, 0=mute)
  *
@@ -25,6 +31,9 @@
 #include <M5Core2.h>
 #include <WiFiMulti.h>
 #include <Audio.h>
+#include <Adafruit_Si4713.h>
+#include <Preferences.h>
+#include <driver/i2s.h>
 #include "Portal.h"
 
 #define SCREEN_W  320
@@ -65,6 +74,12 @@
 #define I2S_BCK   12
 #define I2S_LRC    0
 #define I2S_DOUT   2
+
+// ─── SI4713 FM modulator ──────────────────────────────────────────────────────
+#define SI4713_RST      13
+#define FM_FREQ_MIN   8790   // 87.9 MHz
+#define FM_FREQ_MAX  10790   // 107.9 MHz
+#define FM_FREQ_STEP    20   // 0.2 MHz per step
 
 // ─── Haptic helper (AXP192 LDO3 → vibration motor) ───────────────────────────
 static void haptic(int ms = 40) {
@@ -110,12 +125,18 @@ TFT_eSprite sprite2(&M5.Lcd);   // scrolling ticker (~10 KB)
 // M5Core2 Speaker.cpp owns I2S_NUM_0 (installed at 44100 Hz on M5.begin()).
 // Use I2S_NUM_1 so Audio gets a clean port with no clock conflict → correct pitch.
 Audio       audio(false, 3, I2S_NUM_1);
-WiFiMulti   wifiMulti;
+// SI4713 uses ESP32 internal DAC on GPIO26 (Port B) via I2S_NUM_0 DAC mode.
+// Created only when SI4713 is detected on I2C at boot.
+Audio          *audioFM = nullptr;
+Adafruit_Si4713 si4713(SI4713_RST);
+Preferences     prefs;
+WiFiMulti       wifiMulti;
 
 // Audio runs on its own FreeRTOS task so the display loop never starves it
 void audioTask(void *param) {
     while (true) {
         audio.loop();
+        if (audioFM) audioFM->loop();
         vTaskDelay(1);
     }
 }
@@ -136,10 +157,13 @@ int    volume       = 5;    // 0-10 → audio.setVolume(volume * 2)
 int    g[14]        = {0};
 
 bool   inSettings   = false;
-int    settingSel   = 0;    // 0=Volume 1=Bass 2=Treble
+int    settingSel   = 0;    // 0=Volume 1=Bass 2=Treble [3=FM Freq if present]
 int8_t settingBass  = 0;
 int8_t settingTreble = 0;
 bool   screenOn     = true; // toggled by long-press BtnC
+bool   fmPresent    = false;
+bool   fmMode       = false;   // false=speaker (NS4168), true=FM (SI4713 DAC)
+uint16_t fmFreq     = 10110; // 101.1 MHz default
 
 unsigned short grays[18];
 
@@ -147,32 +171,70 @@ unsigned short grays[18];
 void setupUI();
 void drawSettings();
 
+// ─── Switch between Speaker (NS4168) and FM (SI4713 DAC) output ─────────────
+static void setAudioMode(bool useFM) {
+    if (!fmPresent) return;
+    fmMode = useFM;
+    if (fmMode) {
+        audio.stopSong();
+        delay(100);
+        audioFM->connecttohost(stations[chosen].c_str());
+    } else {
+        audioFM->stopSong();
+        delay(100);
+        audio.connecttohost(stations[chosen].c_str());
+    }
+    haptic(80);
+    setupUI();   // redraw header so FM badge reflects new mode
+    canDraw = true;
+}
+
 // ─── Guarded station change: stop cleanly, debounce 1.5 s ───────────────────
 static unsigned long lastStationChange = 0;
 static void changeStation(int newChosen) {
     if (millis() - lastStationChange < 1500) return;
     lastStationChange = millis();
     chosen = newChosen;
-    audio.stopSong();
+    // Only reconnect the active stream
+    Audio &active = (fmMode && audioFM) ? *audioFM : audio;
+    active.stopSong();
     delay(150);
-    audio.connecttohost(stations[chosen].c_str());
+    active.connecttohost(stations[chosen].c_str());
+    if (fmPresent) {
+        si4713.setRDSstation(stationNames[chosen].substring(0, 8).c_str());
+        si4713.setRDSbuffer("Buffering...");
+    }
     canDraw = true;
+}
+
+// ─── Persist FM frequency to NVS ────────────────────────────────────────────
+static void saveFMFreq() {
+    prefs.begin("radio", false);
+    prefs.putUShort("fmfreq", fmFreq);
+    prefs.end();
 }
 
 // ─── Settings action: increment currently selected parameter ─────────────────
 static void settingsIncrement() {
+    int maxSel = fmPresent ? 4 : 3;
     if (settingSel == 0) {
         volume++;
         if (volume > 10) volume = 0;
         audio.setVolume(volume * 2);
+        if (audioFM) audioFM->setVolume(volume * 2);
     } else if (settingSel == 1) {
         settingBass++;
         if (settingBass > 6) settingBass = -6;
         audio.setTone(settingBass, 0, settingTreble);
-    } else {
+    } else if (settingSel == 2) {
         settingTreble++;
         if (settingTreble > 6) settingTreble = -6;
         audio.setTone(settingBass, 0, settingTreble);
+    } else if (settingSel == 3 && fmPresent) {
+        fmFreq += FM_FREQ_STEP;
+        if (fmFreq > FM_FREQ_MAX) fmFreq = FM_FREQ_MIN;
+        si4713.tuneFM(fmFreq);
+        saveFMFreq();
     }
     drawSettings();
 }
@@ -213,6 +275,11 @@ void setup() {
 
     rdLoadSettings();
 
+    // Load persisted FM frequency
+    prefs.begin("radio", true);
+    fmFreq = prefs.getUShort("fmfreq", 10110);
+    prefs.end();
+
     // Boot splash
     M5.Lcd.fillScreen(TFT_BLACK);
     M5.Lcd.setTextSize(2);
@@ -250,6 +317,68 @@ void setup() {
 
     audio.connecttohost(stations[0].c_str());
 
+    // ── SI4713 FM modulator probe with full I2C diagnostic ────────────────────
+    // Explicit Wire init + manual RST toggle before library call
+    Wire.begin(21, 22);
+    delay(50);
+    pinMode(SI4713_RST, OUTPUT);
+    digitalWrite(SI4713_RST, HIGH); delay(10);
+    digitalWrite(SI4713_RST, LOW);  delay(100);
+    digitalWrite(SI4713_RST, HIGH); delay(150);
+
+    // Raw I2C scan — results shown on screen AND serial
+    M5.Lcd.fillScreen(TFT_BLACK);
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.setTextColor(TFT_GREEN);
+    M5.Lcd.setCursor(0, 0);
+    M5.Lcd.println("I2C scan (SDA=GPIO21, SCL=GPIO22)");
+    M5.Lcd.println("--------------------------------");
+    Serial.println("\n=== I2C SCAN ===");
+    bool anyFound = false;
+    for (uint8_t addr = 0x03; addr <= 0x77; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "  Device at 0x%02X", addr);
+            M5.Lcd.setTextColor(addr == 0x63 ? TFT_YELLOW : TFT_CYAN);
+            M5.Lcd.println(buf);
+            Serial.println(buf);
+            anyFound = true;
+        }
+    }
+    if (!anyFound) {
+        M5.Lcd.setTextColor(TFT_RED);
+        M5.Lcd.println("  NO DEVICES FOUND");
+        Serial.println("  NO DEVICES FOUND");
+    }
+    M5.Lcd.setTextColor(TFT_WHITE);
+    M5.Lcd.println("\n0x63 = SI4713 (SEN high)");
+    M5.Lcd.println("0x11 = SI4713 (SEN low)");
+    M5.Lcd.println("\nWaiting 5s...");
+    Serial.println("===============");
+    delay(5000);
+
+    if (si4713.begin()) {
+        fmPresent = true;
+        si4713.powerUp();
+        si4713.setTXpower(115);
+        si4713.tuneFM(fmFreq);
+        si4713.beginRDS(0x1234);
+        si4713.setRDSstation("M5 OTR");
+        si4713.setRDSbuffer("M5Core2 OTR Radio");
+        i2s_driver_uninstall(I2S_NUM_0);
+        audioFM = new Audio(true, 3, I2S_NUM_0);
+        audioFM->setVolume(volume * 2);
+        // Do NOT connect here — starts in speaker mode; user toggles with long-press BtnA
+        M5.Lcd.setTextColor(TFT_GREEN);
+        M5.Lcd.println("SI4713 INIT OK");
+    } else {
+        M5.Lcd.setTextColor(TFT_RED);
+        M5.Lcd.println("SI4713 begin() FAILED");
+        Serial.println("SI4713 begin() failed");
+    }
+    delay(2000);
+
     // Pin audio to core 0 alongside WiFi; display loop stays on core 1
     xTaskCreatePinnedToCore(audioTask, "audioT", 8192, NULL, 2,
                             &audioTaskHandle, 0);
@@ -270,6 +399,11 @@ void setupUI() {
     M5.Lcd.setTextFont(2);
     M5.Lcd.setTextColor(SW_AMBER, SW_HDR_BG);
     M5.Lcd.drawString("M5 SHORTWAVE", 6, 4);
+    if (fmPresent) {
+        // Green = FM mode active, grey = speaker mode active
+        M5.Lcd.setTextColor(fmMode ? TFT_GREEN : grays[10], SW_HDR_BG);
+        M5.Lcd.drawString("FM", 96, 4);
+    }
 
     // Amber dividers
     const int divs[] = { SW_LINE1, SW_LINE2, SW_LINE3, SW_LINE4, SW_LINE5 };
@@ -398,10 +532,13 @@ void draw3() {
 // ---------------------------------------------------------------------------
 // drawSettings — full-screen sound settings overlay.
 void drawSettings() {
-    const char *labels[3] = { "Volume", "Bass  ", "Treble" };
-    int values[3] = { volume * 2, settingBass, settingTreble };
-    int mins[3]   = { 0, -6, -6 };
-    int maxs[3]   = { 20,  6,  6 };
+    int numRows = fmPresent ? 4 : 3;
+    int rowH    = fmPresent ? 42 : 55;
+    int rowY0   = fmPresent ? 36 : 48;
+
+    const char *labels[] = { "Volume", "Bass  ", "Treble", "FM MHz" };
+    int mins[]  = { 0, -6, -6, (int)FM_FREQ_MIN };
+    int maxs[]  = { 20,  6,  6, (int)FM_FREQ_MAX };
 
     M5.Lcd.startWrite();
     M5.Lcd.fillRect(0, 0, SCREEN_W, SCREEN_H, TFT_BLACK);
@@ -411,23 +548,33 @@ void drawSettings() {
     M5.Lcd.drawString("== SOUND SETTINGS ==", 55, 10);
     M5.Lcd.drawFastHLine(0, 30, SCREEN_W, TFT_ORANGE);
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < numRows; i++) {
         bool sel = (i == settingSel);
-        int  y   = 48 + i * 55;
+        int  y   = rowY0 + i * rowH;
         uint16_t bg = sel ? 0x1082 : TFT_BLACK;
 
-        M5.Lcd.fillRect(20, y - 4, 280, 46, bg);
+        // value as string
+        String valStr;
+        int    valInt;
+        if (i == 0) { valInt = volume * 2; valStr = String(valInt); }
+        else if (i == 1) { valInt = settingBass;   valStr = String(valInt); }
+        else if (i == 2) { valInt = settingTreble; valStr = String(valInt); }
+        else             { valInt = fmFreq;         valStr = String(fmFreq / 100.0f, 1); }
+
+        M5.Lcd.fillRect(20, y - 4, 280, rowH - 6, bg);
         M5.Lcd.setTextColor(sel ? TFT_GREEN : TFT_WHITE, bg);
         M5.Lcd.drawString(labels[i], 30, y);
-        M5.Lcd.drawString(String(values[i]), 230, y);
+        M5.Lcd.drawString(valStr, 230, y);
 
-        int pos = map(values[i], mins[i], maxs[i], 0, 200);
-        M5.Lcd.drawRect(30, y + 20, 202, 10, sel ? TFT_GREEN : grays[12]);
-        M5.Lcd.fillRect(31, y + 21, 200, 8, TFT_BLACK);
-        M5.Lcd.fillRect(31, y + 21, pos,  8, sel ? TFT_GREEN : grays[8]);
+        int pos = map(valInt, mins[i], maxs[i], 0, 200);
+        int by  = y + (fmPresent ? 16 : 20);
+        int bh  = fmPresent ? 8 : 10;
+        M5.Lcd.drawRect(30, by, 202, bh, sel ? TFT_GREEN : grays[12]);
+        M5.Lcd.fillRect(31, by + 1, 200, bh - 2, TFT_BLACK);
+        M5.Lcd.fillRect(31, by + 1, pos, bh - 2, sel ? TFT_GREEN : grays[8]);
     }
 
-    // Settings footer buttons
+    // Footer buttons
     const char *sLbls[] = { "BACK", "SEL", "+" };
     const int   sCx[]   = {  53,    160,   267 };
     M5.Lcd.setTextFont(2);
@@ -467,12 +614,12 @@ void loop() {
     // ---- Sound settings mode ----
     if (inSettings) {
         if (M5.BtnA.wasPressed())                           { haptic(); inSettings = false; setupUI(); canDraw = true; }
-        if (M5.BtnB.wasPressed())                           { haptic(); settingSel = (settingSel + 1) % 3; drawSettings(); }
+        if (M5.BtnB.wasPressed())                           { haptic(); settingSel = (settingSel + 1) % (fmPresent ? 4 : 3); drawSettings(); }
         if (M5.BtnC.wasPressed())                           { haptic(); settingsIncrement(); }
 
         int z = footerZoneTapped(lastTouch, prevTouch);
         if      (z == 0)  { inSettings = false; setupUI(); canDraw = true; }
-        else if (z == 1)  { settingSel = (settingSel + 1) % 3; drawSettings(); }
+        else if (z == 1)  { settingSel = (settingSel + 1) % (fmPresent ? 4 : 3); drawSettings(); }
         else if (z == 2)  { settingsIncrement(); }
 
         vTaskDelay(5);
@@ -495,7 +642,16 @@ void loop() {
     }
 
     // Physical virtual buttons
-    if (M5.BtnA.wasPressed()) { haptic(); inSettings = true; drawSettings(); }
+    // BtnA: short-press = settings; long-press (1s) = toggle FM/Speaker (if FM present)
+    static bool fmToggleHandled = false;
+    if (M5.BtnA.pressedFor(1000) && !fmToggleHandled && fmPresent) {
+        fmToggleHandled = true;
+        setAudioMode(!fmMode);
+    }
+    if (M5.BtnA.wasReleased()) {
+        if (!fmToggleHandled) { haptic(); inSettings = true; drawSettings(); }
+        fmToggleHandled = false;
+    }
     if (M5.BtnB.wasPressed()) {
         haptic();
         changeStation((chosen + 1) % ns);
@@ -542,5 +698,11 @@ void loop() {
 void audio_info(const char *info)            { Serial.print("info        "); Serial.println(info); }
 void audio_id3data(const char *info)         { Serial.print("id3data     "); Serial.println(info); }
 void audio_showstation(const char *info)     { curStation = info;   canDraw = true; }
-void audio_showstreamtitle(const char *info) { songPlaying = info;  canDraw = true; }
+void audio_showstreamtitle(const char *info) {
+    songPlaying = info;
+    canDraw = true;
+    if (fmPresent && info && strlen(info) > 0) {
+        si4713.setRDSbuffer(info);
+    }
+}
 void audio_bitrate(const char *info)         { bitrate = String(info).toInt() / 1000; }

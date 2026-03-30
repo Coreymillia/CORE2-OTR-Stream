@@ -74,26 +74,34 @@ static void haptic(int ms = 40) {
 }
 
 // ─── Stations ────────────────────────────────────────────────────────────────
-#define ns 8
-// ROKiT Radio Network — OTR/classic streams, all 48 kbps MP3
+#define ns 12
+// ROKiT Radio Network — OTR/classic streams (http://IP:PORT/stream)
 String stations[ns] = {
-    "http://streaming06.liveboxstream.uk:8256/stream",  // 1940s Radio
-    "http://streaming05.liveboxstream.uk:8043/stream",  // American Classics
-    "http://streaming06.liveboxstream.uk:8027/stream",  // Jazz Central
-    "http://streaming06.liveboxstream.uk:8150/stream",  // Comedy Gold
-    "http://streaming05.liveboxstream.uk:8039/stream",  // Crime Radio
-    "http://streaming06.liveboxstream.uk:8180/stream",  // Nostalgia Lane
-    "http://streaming05.liveboxstream.uk:8009/stream",  // British Comedy
-    "http://streaming05.liveboxstream.uk:8110/stream",  // Science Fiction
+    "http://149.255.60.195:8256/stream",   // 1940s Radio
+    "http://149.255.60.193:8162/stream",   // American Comedy  ← Fibber McGee & Molly
+    "http://149.255.60.194:8043/stream",   // American Classics
+    "http://149.255.60.195:8027/stream",   // Jazz Central
+    "http://149.255.60.195:8150/stream",   // Comedy Gold
+    "http://149.255.60.195:8168/stream",   // Mystery Radio
+    "http://149.255.60.193:8168/stream",   // Crime & Suspense
+    "http://149.255.60.194:8039/stream",   // Crime Radio
+    "http://149.255.60.195:8162/stream",   // Adventure Stories
+    "http://149.255.60.195:8174/stream",   // Drama Radio
+    "http://149.255.60.195:8180/stream",   // Nostalgia Lane
+    "http://149.255.60.194:8110/stream",   // Science Fiction
 };
 String stationNames[ns] = {
     "1940s Radio",
+    "American Comedy",
     "American Classics",
     "Jazz Central",
     "Comedy Gold",
+    "Mystery Radio",
+    "Crime & Suspense",
     "Crime Radio",
+    "Adventure Stories",
+    "Drama Radio",
     "Nostalgia Lane",
-    "British Comedy",
     "Science Fiction",
 };
 
@@ -286,10 +294,6 @@ void setupUI() {
         M5.Lcd.setTextColor(SW_AMBER, SW_BTN_BG);
         M5.Lcd.drawCentreString(btnLbls[i], btnCx[i], SW_BTN_Y + 4, 2);
     }
-
-    M5.Lcd.setTextFont(1);
-    M5.Lcd.setTextColor(SW_AMBER_D, TFT_BLACK);
-    M5.Lcd.drawCentreString("VOLOS / COPILOT SKIN 2026", 160, 231, 1);
 
     M5.Lcd.endWrite();
 }

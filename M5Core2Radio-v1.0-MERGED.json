@@ -1,0 +1,12 @@
+{
+  "name": "M5Core2Radio — WiFi OTR Internet Radio",
+  "version": "1.0",
+  "description": "WiFi internet radio for M5Stack Core2. Streams 8 classic/OTR stations from ROKiT Radio Network via 16-bit I2S audio (NS4168 amp, no DAC hiss). Retro 1940s skin. Touch footer or BtnA/B/C: SET=sound settings, STA=cycle station, VOL=cycle volume (0-10). Haptic feedback on touch. Hold BtnA on boot to change WiFi. Based on winRadio by Volos Projects.",
+  "author": "CoreyMillia",
+  "category": "Media/Audio",
+  "file": "M5Core2Radio-v1.0-MERGED.bin",
+  "bootloader": "0x1000",
+  "partition": "0x8000",
+  "app": "0x10000",
+  "chip": "esp32"
+}

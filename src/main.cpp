@@ -19,7 +19,7 @@
  *
  * Haptic: vibration motor pulses on every touch event (AXP192 LDO3)
  * WiFi:   credentials stored in NVS via captive portal
- *         Hold BtnA during 3-second boot window to re-enter setup
+ *         Hold BtnC (VOL) 1 second to toggle screen on/off
  */
 
 #include <M5Core2.h>
@@ -139,12 +139,25 @@ bool   inSettings   = false;
 int    settingSel   = 0;    // 0=Volume 1=Bass 2=Treble
 int8_t settingBass  = 0;
 int8_t settingTreble = 0;
+bool   screenOn     = true; // toggled by long-press BtnC
 
 unsigned short grays[18];
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 void setupUI();
 void drawSettings();
+
+// ─── Guarded station change: stop cleanly, debounce 1.5 s ───────────────────
+static unsigned long lastStationChange = 0;
+static void changeStation(int newChosen) {
+    if (millis() - lastStationChange < 1500) return;
+    lastStationChange = millis();
+    chosen = newChosen;
+    audio.stopSong();
+    delay(150);
+    audio.connecttohost(stations[chosen].c_str());
+    canDraw = true;
+}
 
 // ─── Settings action: increment currently selected parameter ─────────────────
 static void settingsIncrement() {
@@ -485,24 +498,31 @@ void loop() {
     if (M5.BtnA.wasPressed()) { haptic(); inSettings = true; drawSettings(); }
     if (M5.BtnB.wasPressed()) {
         haptic();
-        chosen = (chosen + 1) % ns;
-        audio.connecttohost(stations[chosen].c_str());
-        canDraw = true;
+        changeStation((chosen + 1) % ns);
     }
-    if (M5.BtnC.wasPressed()) {
-        haptic();
-        volume = (volume >= 10) ? 0 : volume + 1;
-        audio.setVolume(volume * 2);
-        canDraw = true;
+    // BtnC: short-press = volume up; long-press (1s) = toggle screen on/off
+    static bool screenToggleHandled = false;
+    if (M5.BtnC.pressedFor(1000) && !screenToggleHandled) {
+        screenToggleHandled = true;
+        screenOn = !screenOn;
+        M5.Axp.SetDCVoltage(2, screenOn ? 3300 : 2500);
+        if (screenOn) canDraw = true;
+    }
+    if (M5.BtnC.wasReleased()) {
+        if (!screenToggleHandled) {
+            haptic();
+            volume = (volume >= 10) ? 0 : volume + 1;
+            audio.setVolume(volume * 2);
+            canDraw = true;
+        }
+        screenToggleHandled = false;
     }
 
     // Touch footer zones
     int z = footerZoneTapped(lastTouch, prevTouch);
     if (z == 0) { inSettings = true; drawSettings(); }
     else if (z == 1) {
-        chosen = (chosen + 1) % ns;
-        audio.connecttohost(stations[chosen].c_str());
-        canDraw = true;
+        changeStation((chosen + 1) % ns);
     }
     else if (z == 2) {
         volume = (volume >= 10) ? 0 : volume + 1;

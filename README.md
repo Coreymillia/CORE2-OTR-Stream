@@ -77,7 +77,7 @@ The SI4713 is **fully optional** — the firmware detects it on I2C at boot and 
 | LIN | GPIO26 (Port B) | ESP32 DAC2 analog audio |
 | RIN | GPIO26 (Port B) | Same pin — mono |
 | CS/SEN | Module's own 3V0 pin | Sets I2C address to 0x63 |
-| ANT | ~75cm wire | λ/4 for FM band ≈ 50m range |
+| ANT | ~2 inch wire (recommended) | See FCC disclaimer below — shorter is safer |
 | GP1, GP2, 3V0 | Unconnected | Not needed |
 
 **FM frequency** is set in the sound settings menu (FM MHz) and persists in NVS across reboots.
@@ -133,6 +133,44 @@ Credentials are stored in NVS and survive power cycles.
 ## Planned Features
 
 - **FM passthrough / aux input mode** — stop the internet stream but leave the SI4713 modulator active, allowing an external MP3 player or audio source to be plugged in and broadcast over FM. Turns the Core2 into a general-purpose FM transmitter.
+
+---
+
+## ⚠️ FCC Disclaimer — FM Transmission Legal Notice
+
+> **Read this before connecting an antenna to the SI4713 module.**
+
+### Legal Status
+
+In the United States, low-power FM transmission is governed by **47 CFR Part 15, Subpart D** (unlicensed intentional radiators). Under these rules:
+
+- Transmission is permitted **without a license** only when the signal is so weak it cannot cause interference to licensed stations.
+- The FCC does **not** define a specific wattage or distance limit — it defines an **interference threshold**. If your signal reaches a licensed station's coverage area and causes interference, you are in violation regardless of intent.
+- The FCC **actively enforces** FM interference complaints. They use direction-finding equipment to locate illegal transmitters. Fines start in the thousands of dollars and equipment can be confiscated.
+
+### Antenna Guidance
+
+Antenna length dramatically affects range:
+
+| Antenna | Approximate range | Risk level |
+|---|---|---|
+| No antenna (PCB trace only) | < 3 ft | Minimal |
+| **~2 inch wire (recommended)** | **~10–15 ft** | **Safe for personal use** |
+| 12 inch wire | ~30–50 ft | Use caution |
+| 75 cm / 30 inch (λ/4) | ~80–150 ft | High — may leave your property |
+| Full dipole or amplified | 300+ ft | Likely illegal — do not use |
+
+**Recommendation:** Use a stub of 1–2 inches of wire. This is sufficient to fill a single room and keeps the signal well within your home. The SI4713 at full power with a proper quarter-wave antenna can reach 80+ feet even under non-ideal conditions — confirmed during testing of this project.
+
+### Best Practices
+
+1. **Keep the signal on your own property.** The signal should not be receivable from a public road, a neighbor's property, or anywhere you do not own or control.
+2. **Choose an unused frequency.** Use the settings menu to pick an FM frequency with no existing licensed station in your area. Scan your local FM band before transmitting.
+3. **Use the shortest practical antenna.** 2 inches is recommended. Longer = more range = more legal risk.
+4. **Do not rebroadcast copyrighted content** beyond your own private use. The stations included in this firmware are Old Time Radio (public domain) content intended for personal, private listening only.
+5. **This firmware is provided for educational and personal hobbyist use only.** The authors accept no responsibility for any regulatory violations resulting from its use.
+
+> The FCC takes FM interference seriously. They will find you. Keep it short, keep it local, keep it legal.
 
 ---
 
